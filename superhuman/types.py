@@ -24,3 +24,10 @@ class Thread(TypedDict):
     subject: str
     snippet: str
     last_message_timestamp: float
+
+
+class Folder(TypedDict):
+    id: str
+    name: str
+    type: str
+    message_count: int

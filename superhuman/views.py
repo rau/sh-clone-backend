@@ -2,7 +2,7 @@ import base64
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import List
+from typing import List, TypedDict
 
 from django.shortcuts import redirect
 from google_auth_oauthlib.flow import Flow
@@ -14,7 +14,7 @@ from rest_framework.viewsets import ReadOnlyModelViewSet
 
 from .models import GmailToken
 from .serializers import GmailTokenSerializer
-from .types import Email, Thread
+from .types import Email, Folder, Thread
 from .utils import (
     get_credentials,
     parse_email_headers,
@@ -316,4 +316,108 @@ class MarkReadView(APIView):
             ).execute()
             return Response({"status": "success"})
         except Exception as e:
+            return Response({"error": str(e)}, status=400)
+
+
+class FolderListView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, _) -> Response:
+        token = GmailToken.objects.first()
+        if not token:
+            return Response({"error": "No token found"}, status=404)
+
+        creds = get_credentials(token)
+        service = build("gmail", "v1", credentials=creds)
+
+        try:
+            labels = service.users().labels().list(userId="me").execute()
+            folders: List[Folder] = []
+
+            for label in labels.get("labels", []):
+                label_info = (
+                    service.users().labels().get(userId="me", id=label["id"]).execute()
+                )
+                folders.append(
+                    {
+                        "id": label_info["id"],
+                        "name": label_info["name"],
+                        "type": label_info["type"],
+                        "message_count": label_info.get("messagesTotal", 0),
+                    }
+                )
+
+            return Response(folders)
+        except Exception as e:
+            return Response({"error": str(e)}, status=400)
+
+
+class FolderEmailsView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request) -> Response:
+        token = GmailToken.objects.first()
+        if not token:
+            return Response({"error": "No token found"}, status=404)
+
+        folder_id = request.GET.get("folder_id")
+        if not folder_id:
+            return Response({"error": "No folder_id provided"}, status=400)
+
+        system_labels = {
+            "inbox": "INBOX",
+            "sent": "SENT",
+            "drafs": "DRAFT",
+            "spam": "SPAM",
+            "trash": "TRASH",
+            "important": "IMPORTANT",
+            "starred": "STARRED",
+            "unread": "UNREAD",
+        }
+
+        label_id = system_labels.get(folder_id.lower(), folder_id)
+
+        creds = get_credentials(token)
+        service = build("gmail", "v1", credentials=creds)
+
+        try:
+            threads = (
+                service.users()
+                .threads()
+                .list(userId="me", maxResults=20, labelIds=[label_id])
+                .execute()
+            )
+
+            thread_list: List[Thread] = []
+
+            for thread in threads.get("threads", []):
+                thread_data = (
+                    service.users()
+                    .threads()
+                    .get(userId="me", id=thread["id"], format="full")
+                    .execute()
+                )
+
+                messages = []
+                for msg in thread_data["messages"]:
+                    email = parse_email_headers(msg["payload"]["headers"], msg)
+                    messages.append(email)
+
+                messages.sort(key=lambda x: x["timestamp"])
+
+                if messages:
+                    thread_list.append(
+                        {
+                            "id": thread["id"],
+                            "messages": messages,
+                            "subject": messages[0]["subject"],
+                            "snippet": messages[-1]["snippet"],
+                            "last_message_timestamp": messages[-1]["timestamp"],
+                        }
+                    )
+
+            thread_list.sort(key=lambda x: x["last_message_timestamp"], reverse=True)
+            return Response(thread_list)
+        except Exception as e:
+            print(e)
             return Response({"error": str(e)}, status=400)

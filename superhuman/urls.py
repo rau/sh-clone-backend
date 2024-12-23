@@ -14,5 +14,7 @@ urlpatterns = [
     path("search/", views.SearchEmailView.as_view(), name="email-search"),
     path("markdone/", views.MarkDoneView.as_view(), name="mark-done"),
     path("markread/", views.MarkReadView.as_view(), name="mark-read"),
+    path("folders/", views.FolderListView.as_view(), name="folder-list"),
+    path("folder-emails/", views.FolderEmailsView.as_view(), name="folder-emails"),
     path("", include(router.urls)),
 ]
