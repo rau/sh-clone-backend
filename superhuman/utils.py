@@ -1,3 +1,4 @@
+import base64
 import json
 from email.utils import parsedate_to_datetime
 from typing import List
@@ -37,6 +38,17 @@ def parse_email_headers(headers: List[dict], msg: dict) -> Email:
     message_id = next((h["value"] for h in headers if h["name"] == "Message-ID"), "")
 
     parsed_date = parsedate_to_datetime(date)
+    body = ""
+
+    if "payload" in msg:
+        if "body" in msg["payload"]:
+            if "data" in msg["payload"]["body"]:
+                body = base64.urlsafe_b64decode(msg["payload"]["body"]["data"]).decode()
+        elif "parts" in msg["payload"]:
+            for part in msg["payload"]["parts"]:
+                if part["mimeType"] == "text/plain" and "data" in part["body"]:
+                    body = base64.urlsafe_b64decode(part["body"]["data"]).decode()
+                    break
 
     return {
         "id": message_id,
@@ -48,6 +60,7 @@ def parse_email_headers(headers: List[dict], msg: dict) -> Email:
         "timestamp": parsed_date.timestamp(),
         "snippet": msg.get("snippet", ""),
         "read": "UNREAD" not in msg["labelIds"],
+        "body": body,
     }
 
 

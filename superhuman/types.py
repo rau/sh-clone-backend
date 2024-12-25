@@ -16,6 +16,7 @@ class Email(TypedDict):
     timestamp: float
     snippet: str
     read: bool
+    body: str
 
 
 class Thread(TypedDict):

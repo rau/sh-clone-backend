@@ -260,10 +260,8 @@ class SearchEmailView(APIView):
                 .get(userId="me", id=message["id"], format="full")
                 .execute()
             )
-            payload = msg["payload"]
-            headers = payload["headers"]
 
-            emails.append(parse_email_headers(headers, msg))
+            emails.append(parse_email_headers(msg["payload"]["headers"], msg))
 
         return Response(emails)
 
@@ -418,6 +416,52 @@ class FolderEmailsView(APIView):
 
             thread_list.sort(key=lambda x: x["last_message_timestamp"], reverse=True)
             return Response(thread_list)
+        except Exception as e:
+            print(e)
+            return Response({"error": str(e)}, status=400)
+
+
+class CreateFolderView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        token = GmailToken.objects.first()
+        if not token:
+            return Response({"error": "No token found"}, status=404)
+
+        folder_name = request.data.get("folder_name")
+        if not folder_name:
+            return Response({"error": "No folder name provided"}, status=400)
+
+        creds = get_credentials(token)
+        service = build("gmail", "v1", credentials=creds)
+
+        try:
+            labels = service.users().labels().list(userId="me").execute()
+            existing_labels = [label["name"] for label in labels.get("labels", [])]
+
+            if folder_name in existing_labels:
+                return Response({"error": "Folder already exists"}, status=400)
+
+            label = (
+                service.users()
+                .labels()
+                .create(
+                    userId="me",
+                    body={"name": folder_name, "labelListVisibility": "labelShow"},
+                )
+                .execute()
+            )
+
+            return Response(
+                {
+                    "id": label["id"],
+                    "name": label["name"],
+                    "type": label["type"],
+                    "message_count": 0,
+                }
+            )
+
         except Exception as e:
             print(e)
             return Response({"error": str(e)}, status=400)
