@@ -27,7 +27,8 @@ class SendEmailView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        token = GmailToken.objects.first()
+        account_id = request.headers.get("X-Account-ID")
+        token = GmailToken.objects.get(id=account_id)
         if not token:
             return Response({"error": "No token found"}, status=404)
 
@@ -78,8 +79,9 @@ class SendEmailView(APIView):
 class EmailListView(APIView):
     permission_classes = [AllowAny]
 
-    def get(self, _):
-        token = GmailToken.objects.first()
+    def get(self, request):
+        print("HEADERS asd", request.headers)
+        token = GmailToken.objects.get(id=request.headers.get("X-Account-ID"))
         if not token:
             return Response({"error": "No token found"}, status=404)
 
@@ -132,12 +134,15 @@ class GmailAuthView(APIView):
         flow = Flow.from_client_secrets_file(
             "client_secrets.json",
             scopes=[
+                "openid",
                 "https://www.googleapis.com/auth/gmail.readonly",
                 "https://www.googleapis.com/auth/gmail.send",
                 "https://www.googleapis.com/auth/gmail.compose",
                 "https://www.googleapis.com/auth/gmail.modify",
                 # "https://www.googleapis.com/auth/gmail.metadata",
                 "https://www.googleapis.com/auth/contacts.readonly",
+                "https://www.googleapis.com/auth/userinfo.email",
+                "https://www.googleapis.com/auth/userinfo.profile",
                 "https://mail.google.com/",
             ],
             redirect_uri="http://localhost:8000/api/auth/gmail/",
@@ -148,7 +153,6 @@ class GmailAuthView(APIView):
             flow.fetch_token(code=request.GET.get("code"))
             credentials = flow.credentials
 
-            GmailToken.objects.all().delete()
             GmailToken.objects.create(
                 token=credentials.token, refresh_token=credentials.refresh_token
             )
@@ -165,12 +169,20 @@ class GmailTokenViewSet(ReadOnlyModelViewSet):
     serializer_class = GmailTokenSerializer
     permission_classes = [AllowAny]
 
+    def perform_destroy(self, instance):
+        instance.delete()
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        self.perform_destroy(instance)
+        return Response(status=204)
+
 
 class ContactListView(APIView):
     permission_classes = [AllowAny]
 
-    def get(self, _):
-        token = GmailToken.objects.first()
+    def get(self, request):
+        token = GmailToken.objects.get(id=request.headers.get("X-Account-ID"))
         if not token:
             return Response({"error": "No token found"}, status=404)
 
@@ -218,7 +230,7 @@ class SearchEmailView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        token = GmailToken.objects.first()
+        token = GmailToken.objects.get(id=request.headers.get("X-Account-ID"))
         if not token:
             return Response({"error": "No token found"}, status=404)
 
@@ -270,7 +282,7 @@ class MarkDoneView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        token = GmailToken.objects.first()
+        token = GmailToken.objects.get(id=request.headers.get("X-Account-ID"))
         if not token:
             return Response({"error": "No token found"}, status=404)
 
@@ -282,9 +294,10 @@ class MarkDoneView(APIView):
         service = build("gmail", "v1", credentials=creds)
 
         try:
+            thread = service.users().messages().get(userId="me", id=email_id).execute()
             service.users().messages().modify(
                 userId="me",
-                id=email_id,
+                id=thread["id"],
                 body={"removeLabelIds": ["INBOX"]},
             ).execute()
             return Response({"status": "success"})
@@ -297,7 +310,7 @@ class MarkReadView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        token = GmailToken.objects.first()
+        token = GmailToken.objects.get(id=request.headers.get("X-Account-ID"))
         if not token:
             return Response({"error": "No token found"}, status=404)
 
@@ -320,8 +333,8 @@ class MarkReadView(APIView):
 class FolderListView(APIView):
     permission_classes = [AllowAny]
 
-    def get(self, _) -> Response:
-        token = GmailToken.objects.first()
+    def get(self, request) -> Response:
+        token = GmailToken.objects.get(id=request.headers.get("X-Account-ID"))
         if not token:
             return Response({"error": "No token found"}, status=404)
 
@@ -354,7 +367,7 @@ class FolderEmailsView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request) -> Response:
-        token = GmailToken.objects.first()
+        token = GmailToken.objects.get(id=request.headers.get("X-Account-ID"))
         if not token:
             return Response({"error": "No token found"}, status=404)
 
@@ -425,7 +438,7 @@ class CreateFolderView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        token = GmailToken.objects.first()
+        token = GmailToken.objects.get(id=request.headers.get("X-Account-ID"))
         if not token:
             return Response({"error": "No token found"}, status=404)
 
@@ -465,3 +478,34 @@ class CreateFolderView(APIView):
         except Exception as e:
             print(e)
             return Response({"error": str(e)}, status=400)
+
+
+class AccountsView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, _):
+        tokens = GmailToken.objects.all()
+        if not tokens:
+            return Response({"error": "No token found"}, status=404)
+
+        accounts = []
+        for token in tokens:
+            creds = get_credentials(token)
+            service = build("oauth2", "v2", credentials=creds)
+
+            try:
+                user_info = service.userinfo().get().execute()
+                accounts.append(
+                    {
+                        "id": token.id,
+                        "email": user_info.get("email"),
+                        "name": user_info.get("name"),
+                        "picture": user_info.get("picture"),
+                        "provider": "gmail",
+                    }
+                )
+            except Exception as e:
+                print(e)
+                continue
+
+        return Response(accounts)

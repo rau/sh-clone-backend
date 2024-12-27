@@ -17,5 +17,6 @@ urlpatterns = [
     path("folders/", views.FolderListView.as_view(), name="folder-list"),
     path("folder-emails/", views.FolderEmailsView.as_view(), name="folder-emails"),
     path("create-folder/", views.CreateFolderView.as_view(), name="create-folder"),
+    path("accounts/", views.AccountsView.as_view(), name="accounts"),
     path("", include(router.urls)),
 ]

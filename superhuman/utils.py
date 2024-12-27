@@ -51,7 +51,7 @@ def parse_email_headers(headers: List[dict], msg: dict) -> Email:
                     break
 
     return {
-        "id": message_id,
+        "id": msg["id"],
         "thread_id": msg["threadId"],
         "subject": subject,
         "sender": parse_contact(from_header),
