@@ -35,42 +35,46 @@ def parse_email_headers(headers: List[dict], msg: dict) -> Email:
     from_header = next((h["value"] for h in headers if h["name"] == "From"), "Unknown")
     to_header = next((h["value"] for h in headers if h["name"] == "To"), "")
     date = next((h["value"] for h in headers if h["name"] == "Date"), "")
-    message_id = next((h["value"] for h in headers if h["name"] == "Message-ID"), "")
 
     parsed_date = parsedate_to_datetime(date)
     body = ""
 
     if "payload" in msg:
-        if "body" in msg["payload"]:
-            if "data" in msg["payload"]["body"]:
-                body = base64.urlsafe_b64decode(msg["payload"]["body"]["data"]).decode()
+        if "body" in msg["payload"] and "data" in msg["payload"]["body"]:
+            body = base64.urlsafe_b64decode(msg["payload"]["body"]["data"]).decode()
         elif "parts" in msg["payload"]:
             for part in msg["payload"]["parts"]:
-                if part["mimeType"] == "text/plain" and "data" in part["body"]:
+                print(part["mimeType"])
+                if part["mimeType"] == "text/html" and "data" in part["body"]:
+                    print("checking")
                     body = base64.urlsafe_b64decode(part["body"]["data"]).decode()
                     break
+
+    sender = parse_contact(from_header)
+    sender["is_me"] = "SENT" in msg["labelIds"]
 
     return {
         "id": msg["id"],
         "thread_id": msg["threadId"],
         "subject": subject,
-        "sender": parse_contact(from_header),
+        "sender": sender,
         "to": parse_recipients(to_header),
         "date": parsed_date.isoformat(),
         "timestamp": parsed_date.timestamp(),
         "snippet": msg.get("snippet", ""),
         "read": "UNREAD" not in msg["labelIds"],
         "body": body,
+        "msg": msg,
     }
 
 
 def parse_contact(header: str) -> Contact:
     if "<" in header and ">" in header:
-        name = header.split("<")[0].strip()
-        email = header.split("<")[1].strip(">")
+        name = header.split("<")[0].strip().replace('"', "")
+        email = header.split("<")[1].strip(">").strip().replace('"', "")
     else:
         name = ""
-        email = header
+        email = header.strip().replace('"', "")
     return {"name": name, "email": email}
 
 
