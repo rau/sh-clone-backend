@@ -32,3 +32,15 @@ class Folder(TypedDict):
     name: str
     type: str
     message_count: int
+
+
+class Contact:
+    name: str
+    email: str
+    is_me: bool = False
+
+
+class Recipients:
+    to: List[Contact]
+    cc: List[Contact]
+    bcc: List[Contact]

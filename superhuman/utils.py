@@ -5,7 +5,7 @@ from typing import List
 
 from google.oauth2.credentials import Credentials
 
-from .types import Contact, Email
+from .types import Contact, Email, Recipients
 
 
 def pretty_print_json(json_data):
@@ -33,7 +33,6 @@ def parse_email_headers(headers: List[dict], msg: dict) -> Email:
         (h["value"] for h in headers if h["name"] == "Subject"), "No Subject"
     )
     from_header = next((h["value"] for h in headers if h["name"] == "From"), "Unknown")
-    to_header = next((h["value"] for h in headers if h["name"] == "To"), "")
     date = next((h["value"] for h in headers if h["name"] == "Date"), "")
 
     parsed_date = parsedate_to_datetime(date)
@@ -44,9 +43,17 @@ def parse_email_headers(headers: List[dict], msg: dict) -> Email:
             body = base64.urlsafe_b64decode(msg["payload"]["body"]["data"]).decode()
         elif "parts" in msg["payload"]:
             for part in msg["payload"]["parts"]:
-                print(part["mimeType"])
-                if part["mimeType"] == "text/html" and "data" in part["body"]:
-                    print("checking")
+                if part["mimeType"] == "multipart/alternative":
+                    for subpart in part["parts"]:
+                        if (
+                            subpart["mimeType"] == "text/html"
+                            and "data" in subpart["body"]
+                        ):
+                            body = base64.urlsafe_b64decode(
+                                subpart["body"]["data"]
+                            ).decode()
+                            break
+                elif part["mimeType"] == "text/html" and "data" in part["body"]:
                     body = base64.urlsafe_b64decode(part["body"]["data"]).decode()
                     break
 
@@ -58,13 +65,12 @@ def parse_email_headers(headers: List[dict], msg: dict) -> Email:
         "thread_id": msg["threadId"],
         "subject": subject,
         "sender": sender,
-        "to": parse_recipients(to_header),
+        "to": parse_recipients(headers),
         "date": parsed_date.isoformat(),
         "timestamp": parsed_date.timestamp(),
         "snippet": msg.get("snippet", ""),
         "read": "UNREAD" not in msg["labelIds"],
         "body": body,
-        "msg": msg,
     }
 
 
@@ -78,7 +84,21 @@ def parse_contact(header: str) -> Contact:
     return {"name": name, "email": email}
 
 
-def parse_recipients(header: str) -> List[Contact]:
-    if not header:
-        return []
-    return [parse_contact(addr.strip()) for addr in header.split(",")]
+def parse_recipients(headers: List[dict]) -> Recipients:
+    to_header = next((h["value"] for h in headers if h["name"] == "To"), "")
+    cc_header = next((h["value"] for h in headers if h["name"] == "Cc"), "")
+    bcc_header = next((h["value"] for h in headers if h["name"] == "Bcc"), "")
+
+    return {
+        "to": [
+            parse_contact(addr.strip()) for addr in to_header.split(",") if addr.strip()
+        ],
+        "cc": [
+            parse_contact(addr.strip()) for addr in cc_header.split(",") if addr.strip()
+        ],
+        "bcc": [
+            parse_contact(addr.strip())
+            for addr in bcc_header.split(",")
+            if addr.strip()
+        ],
+    }
