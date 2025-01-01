@@ -589,3 +589,35 @@ class TrashEmailView(APIView):
         except Exception as e:
             print(e)
             return Response({"error": str(e)}, status=400)
+
+
+class SpamEmailView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        token = GmailToken.objects.get(id=request.headers.get("X-Account-ID"))
+        if not token:
+            return Response({"error": "No token found"}, status=404)
+
+        email_id = request.data.get("email_id")
+        if not email_id:
+            return Response({"error": "No email_id provided"}, status=400)
+
+        creds = get_credentials(token)
+        service = build("gmail", "v1", credentials=creds)
+
+        spam = request.data.get("spam", True)
+
+        try:
+            service.users().threads().modify(
+                userId="me",
+                id=email_id,
+                body={
+                    "addLabelIds": ["SPAM"] if spam else ["INBOX"],
+                    "removeLabelIds": ["SPAM"] if not spam else ["INBOX"],
+                },
+            ).execute()
+            return Response({"status": "success"})
+        except Exception as e:
+            print(e)
+            return Response({"error": str(e)}, status=400)

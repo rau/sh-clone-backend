@@ -14,6 +14,7 @@ urlpatterns = [
     path("markdone/", views.MarkDoneView.as_view(), name="mark-done"),
     path("markundone/", views.MarkUndoneView.as_view(), name="mark-undone"),
     path("read/", views.MarkReadView.as_view(), name="mark-read"),
+    path("spam/", views.SpamEmailView.as_view(), name="spam-email"),
     path("folders/", views.FolderListView.as_view(), name="folder-list"),
     path("folder-emails/", views.FolderEmailsView.as_view(), name="folder-emails"),
     path("create-folder/", views.CreateFolderView.as_view(), name="create-folder"),
