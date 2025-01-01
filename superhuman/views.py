@@ -76,57 +76,6 @@ class SendEmailView(APIView):
             return Response({"error": str(e)}, status=400)
 
 
-class EmailListView(APIView):
-    permission_classes = [AllowAny]
-
-    def get(self, request):
-        print("HEADERS asd", request.headers)
-        token = GmailToken.objects.get(id=request.headers.get("X-Account-ID"))
-        if not token:
-            return Response({"error": "No token found"}, status=404)
-
-        creds = get_credentials(token)
-        service = build("gmail", "v1", credentials=creds)
-
-        threads = (
-            service.users()
-            .threads()
-            .list(userId="me", maxResults=20, labelIds=["INBOX"])
-            .execute()
-        )
-
-        thread_list: List[Thread] = []
-
-        for thread in threads.get("threads", []):
-            thread_data = (
-                service.users()
-                .threads()
-                .get(userId="me", id=thread["id"], format="full")
-                .execute()
-            )
-
-            messages = []
-            for msg in thread_data["messages"]:
-                email = parse_email_headers(msg["payload"]["headers"], msg)
-                messages.append(email)
-
-            messages.sort(key=lambda x: x["timestamp"])
-
-            if messages:
-                thread_list.append(
-                    {
-                        "id": thread["id"],
-                        "messages": messages,
-                        "subject": messages[0]["subject"],
-                        "snippet": messages[-1]["snippet"],
-                        "last_message_timestamp": messages[-1]["timestamp"],
-                    }
-                )
-
-        thread_list.sort(key=lambda x: x["last_message_timestamp"], reverse=True)
-        return Response(thread_list)
-
-
 class GmailAuthView(APIView):
     permission_classes = []
 
@@ -146,8 +95,6 @@ class GmailAuthView(APIView):
                 "https://mail.google.com/",
             ],
             redirect_uri="http://localhost:8000/api/auth/gmail/",
-            # access_type="offline",
-            # prompt="consent",
         )
         if "code" in request.GET:
             flow.fetch_token(code=request.GET.get("code"))
@@ -294,11 +241,33 @@ class MarkDoneView(APIView):
         service = build("gmail", "v1", credentials=creds)
 
         try:
-            thread = service.users().messages().get(userId="me", id=email_id).execute()
-            service.users().messages().modify(
+            labels = service.users().labels().list(userId="me").execute()
+            done_label = next(
+                (l for l in labels["labels"] if l["name"] == "[SHClone] Done"), None
+            )
+            print(done_label)
+
+            if not done_label:
+                done_label = (
+                    service.users()
+                    .labels()
+                    .create(
+                        userId="me",
+                        body={
+                            "name": "[SHClone] Done",
+                            "labelListVisibility": "labelShow",
+                        },
+                    )
+                    .execute()
+                )
+
+            service.users().threads().modify(
                 userId="me",
-                id=thread["id"],
-                body={"removeLabelIds": ["INBOX"]},
+                id=email_id,
+                body={
+                    "removeLabelIds": ["INBOX"],
+                    "addLabelIds": [done_label["id"]],
+                },
             ).execute()
             return Response({"status": "success"})
         except Exception as e:
@@ -318,15 +287,23 @@ class MarkReadView(APIView):
         if not email_id:
             return Response({"error": "No email_id provided"}, status=400)
 
+        read = request.data.get("read", True)
+
         creds = get_credentials(token)
         service = build("gmail", "v1", credentials=creds)
 
         try:
-            service.users().messages().modify(
-                userId="me", id=email_id, body={"removeLabelIds": ["UNREAD"]}
+            service.users().threads().modify(
+                userId="me",
+                id=email_id,
+                body={
+                    "addLabelIds": [] if read else ["UNREAD"],
+                    "removeLabelIds": ["UNREAD"] if read else [],
+                },
             ).execute()
             return Response({"status": "success"})
         except Exception as e:
+            print(e)
             return Response({"error": str(e)}, status=400)
 
 
@@ -424,6 +401,8 @@ class FolderEmailsView(APIView):
                             "subject": messages[0]["subject"],
                             "snippet": messages[-1]["snippet"],
                             "last_message_timestamp": messages[-1]["timestamp"],
+                            "starred": "STARRED"
+                            in thread_data["messages"][-1]["labelIds"],
                         }
                     )
 
@@ -509,3 +488,72 @@ class AccountsView(APIView):
                 continue
 
         return Response(accounts)
+
+
+class MarkUndoneView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        token = GmailToken.objects.get(id=request.headers.get("X-Account-ID"))
+        if not token:
+            return Response({"error": "No token found"}, status=404)
+
+        email_id = request.data.get("email_id")
+        if not email_id:
+            return Response({"error": "No email_id provided"}, status=400)
+
+        creds = get_credentials(token)
+        service = build("gmail", "v1", credentials=creds)
+
+        try:
+            labels = service.users().labels().list(userId="me").execute()
+            done_label = next(
+                (l for l in labels["labels"] if l["name"] == "[SHClone] Done"), None
+            )
+
+            if done_label:
+                service.users().threads().modify(
+                    userId="me",
+                    id=email_id,
+                    body={
+                        "addLabelIds": ["INBOX"],
+                        "removeLabelIds": [done_label["id"]],
+                    },
+                ).execute()
+                return Response({"status": "success"})
+            return Response({"error": "Done label not found"}, status=400)
+        except Exception as e:
+            print(e)
+            return Response({"error": str(e)}, status=400)
+
+
+class StarEmailView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        token = GmailToken.objects.get(id=request.headers.get("X-Account-ID"))
+        if not token:
+            return Response({"error": "No token found"}, status=404)
+
+        email_id = request.data.get("email_id")
+        if not email_id:
+            return Response({"error": "No email_id provided"}, status=400)
+
+        star = request.data.get("star", True)
+
+        creds = get_credentials(token)
+        service = build("gmail", "v1", credentials=creds)
+
+        try:
+            service.users().threads().modify(
+                userId="me",
+                id=email_id,
+                body={
+                    "addLabelIds": ["STARRED"] if star else [],
+                    "removeLabelIds": ["STARRED"] if not star else [],
+                },
+            ).execute()
+            return Response({"status": "success"})
+        except Exception as e:
+            print(e)
+            return Response({"error": str(e)}, status=400)

@@ -25,6 +25,7 @@ class Thread(TypedDict):
     subject: str
     snippet: str
     last_message_timestamp: float
+    starred: bool
 
 
 class Folder(TypedDict):
