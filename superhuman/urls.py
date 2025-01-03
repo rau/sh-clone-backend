@@ -21,5 +21,8 @@ urlpatterns = [
     path("accounts/", views.AccountsView.as_view(), name="accounts"),
     path("star/", views.StarEmailView.as_view(), name="star-email"),
     path("trash/", views.TrashEmailView.as_view(), name="trash-email"),
+    path(
+        "modify-labels/", views.ModifyThreadLabelsView.as_view(), name="modify-labels"
+    ),
     path("", include(router.urls)),
 ]
