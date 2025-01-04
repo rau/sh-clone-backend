@@ -1,9 +1,11 @@
+import asyncio
 import base64
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import List, TypedDict
+from typing import List
 
+from asgiref.sync import sync_to_async
 from django.shortcuts import redirect
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
@@ -14,12 +16,12 @@ from rest_framework.viewsets import ReadOnlyModelViewSet
 
 from .models import GmailToken
 from .serializers import GmailTokenSerializer
-from .types import Email, Folder, Thread
+from .types import Email, Folder
 from .utils import (
     get_credentials,
-    parse_email_headers,
     parse_recipients,
-    pretty_print_json,
+    process_message,
+    process_messages_async,
 )
 
 
@@ -116,12 +118,9 @@ class GmailTokenViewSet(ReadOnlyModelViewSet):
     serializer_class = GmailTokenSerializer
     permission_classes = [AllowAny]
 
-    def perform_destroy(self, instance):
-        instance.delete()
-
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
-        self.perform_destroy(instance)
+        instance.delete()
         return Response(status=204)
 
 
@@ -152,10 +151,10 @@ class ContactListView(APIView):
             )
             headers = msg["payload"]["headers"]
             to_header = next((h["value"] for h in headers if h["name"] == "to"), "")
-            if to_header:
-                for contact in parse_recipients(to_header):
-                    key = f"{contact['name']}|{contact['email']}"
-                    contact_freq[key] = contact_freq.get(key, 0) + 1
+            # if to_header:
+            #     for contact in parse_recipients(to_header):
+            #         key = f"{contact['name']}|{contact['email']}"
+            #         contact_freq[key] = contact_freq.get(key, 0) + 1
 
         contacts = [
             {
@@ -220,7 +219,7 @@ class SearchEmailView(APIView):
                 .execute()
             )
 
-            emails.append(parse_email_headers(msg["payload"]["headers"], msg))
+            emails.append(process_message(msg, creds))
 
         return Response(emails)
 
@@ -345,73 +344,78 @@ class FolderEmailsView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request) -> Response:
-        token = GmailToken.objects.get(id=request.headers.get("X-Account-ID"))
-        if not token:
-            return Response({"error": "No token found"}, status=404)
-
-        folder_id = request.GET.get("folder_id")
-        if not folder_id:
-            return Response({"error": "No folder_id provided"}, status=400)
-
-        system_labels = {
-            "inbox": "INBOX",
-            "sent": "SENT",
-            "drafs": "DRAFT",
-            "spam": "SPAM",
-            "trash": "TRASH",
-            "important": "IMPORTANT",
-            "starred": "STARRED",
-            "unread": "UNREAD",
-        }
-
-        label_id = system_labels.get(folder_id.lower(), folder_id)
-
-        creds = get_credentials(token)
-        service = build("gmail", "v1", credentials=creds)
-
-        try:
-            threads = (
-                service.users()
-                .threads()
-                .list(userId="me", maxResults=20, labelIds=[label_id])
-                .execute()
+        async def fetch_folder_emails():
+            token = await sync_to_async(GmailToken.objects.get)(
+                id=request.headers.get("X-Account-ID")
             )
+            if not token:
+                return Response({"error": "No token found"}, status=404)
 
-            thread_list: List[Thread] = []
+            folder_id = request.GET.get("folder_id")
+            if not folder_id:
+                return Response({"error": "No folder_id provided"}, status=400)
 
-            for thread in threads.get("threads", []):
-                thread_data = (
-                    service.users()
+            system_labels = {
+                "inbox": "INBOX",
+                "sent": "SENT",
+                "drafs": "DRAFT",
+                "spam": "SPAM",
+                "trash": "TRASH",
+                "important": "IMPORTANT",
+                "starred": "STARRED",
+                "unread": "UNREAD",
+            }
+
+            label_id = system_labels.get(folder_id.lower(), folder_id)
+            creds = get_credentials(token)
+            service = build("gmail", "v1", credentials=creds)
+
+            try:
+                threads = await asyncio.to_thread(
+                    lambda: service.users()
                     .threads()
-                    .get(userId="me", id=thread["id"], format="full")
+                    .list(userId="me", maxResults=20, labelIds=[label_id])
                     .execute()
                 )
 
-                messages = []
-                for msg in thread_data["messages"]:
-                    email = parse_email_headers(msg["payload"]["headers"], msg)
-                    messages.append(email)
-
-                messages.sort(key=lambda x: x["timestamp"])
-
-                if messages:
-                    thread_list.append(
-                        {
-                            "id": thread["id"],
-                            "messages": messages,
-                            "subject": messages[0]["subject"],
-                            "snippet": messages[-1]["snippet"],
-                            "last_message_timestamp": messages[-1]["timestamp"],
-                            "starred": "STARRED"
-                            in thread_data["messages"][-1]["labelIds"],
-                        }
+                thread_list = []
+                for thread in threads.get("threads", []):
+                    thread_data = await asyncio.to_thread(
+                        lambda: service.users()
+                        .threads()
+                        .get(userId="me", id=thread["id"], format="full")
+                        .execute()
                     )
 
-            thread_list.sort(key=lambda x: x["last_message_timestamp"], reverse=True)
-            return Response(thread_list)
-        except Exception as e:
-            print(e)
-            return Response({"error": str(e)}, status=400)
+                    messages = await process_messages_async(
+                        thread_data["messages"], creds
+                    )
+                    messages.sort(key=lambda x: x["timestamp"])
+
+                    if messages:
+                        thread_list.append(
+                            {
+                                "id": thread["id"],
+                                "messages": messages,
+                                "subject": messages[0]["subject"],
+                                "snippet": messages[-1]["snippet"],
+                                "last_message_timestamp": messages[-1]["timestamp"],
+                                "starred": "STARRED"
+                                in thread_data["messages"][-1]["labelIds"],
+                            }
+                        )
+
+                thread_list.sort(
+                    key=lambda x: x["last_message_timestamp"], reverse=True
+                )
+                print("threaad_list len", len(thread_list))
+                return Response(thread_list)
+
+            except Exception as e:
+                print(e)
+                return Response({"error": str(e)}, status=400)
+
+        return asyncio.run(fetch_folder_emails())
 
 
 class CreateFolderView(APIView):
@@ -604,8 +608,8 @@ class SpamEmailView(APIView):
             return Response({"error": "No token found"}, status=404)
 
         email_ids = request.data.get("email_ids", [])
-        if not email_id:
-            return Response({"error": "No email_id provided"}, status=400)
+        if not email_ids:
+            return Response({"error": "No email_ids provided"}, status=400)
 
         creds = get_credentials(token)
         service = build("gmail", "v1", credentials=creds)
@@ -657,6 +661,40 @@ class ModifyThreadLabelsView(APIView):
                     },
                 ).execute()
             return Response({"status": "success"})
+        except Exception as e:
+            print(e)
+            return Response({"error": str(e)}, status=400)
+
+
+class GetAttachmentView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        token = GmailToken.objects.get(id=request.headers.get("X-Account-ID"))
+        if not token:
+            return Response({"error": "No token found"}, status=404)
+
+        message_id = request.GET.get("message_id")
+        attachment_id = request.GET.get("attachment_id")
+        if not message_id or not attachment_id:
+            return Response(
+                {"error": "Missing message_id or attachment_id"}, status=400
+            )
+
+        creds = get_credentials(token)
+        service = build("gmail", "v1", credentials=creds)
+
+        try:
+            attachment = (
+                service.users()
+                .messages()
+                .attachments()
+                .get(userId="me", messageId=message_id, id=attachment_id)
+                .execute()
+            )
+
+            data = attachment["data"]
+            return Response({"data": data})
         except Exception as e:
             print(e)
             return Response({"error": str(e)}, status=400)

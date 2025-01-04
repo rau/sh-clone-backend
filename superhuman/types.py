@@ -1,22 +1,41 @@
+from dataclasses import dataclass
 from typing import List, TypedDict
 
 
-class Contact(TypedDict):
+@dataclass
+class Contact:
     name: str
     email: str
+    is_me: bool
 
 
-class Email(TypedDict):
+@dataclass
+class Recipients:
+    to: List[Contact]
+    cc: List[Contact]
+    bcc: List[Contact]
+
+
+@dataclass
+class Attachment:
+    filename: str
+    mime_type: str
+    data: str
+
+
+@dataclass
+class Email:
     id: str
     thread_id: str
     subject: str
     sender: Contact
-    to: List[Contact]
+    to: Recipients
     date: str
     timestamp: float
     snippet: str
     read: bool
     body: str
+    attachments: List[Attachment]
 
 
 class Thread(TypedDict):
@@ -33,15 +52,3 @@ class Folder(TypedDict):
     name: str
     type: str
     message_count: int
-
-
-class Contact:
-    name: str
-    email: str
-    is_me: bool = False
-
-
-class Recipients:
-    to: List[Contact]
-    cc: List[Contact]
-    bcc: List[Contact]

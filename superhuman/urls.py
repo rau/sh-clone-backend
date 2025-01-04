@@ -24,5 +24,6 @@ urlpatterns = [
     path(
         "modify-labels/", views.ModifyThreadLabelsView.as_view(), name="modify-labels"
     ),
+    path("attachment/", views.GetAttachmentView.as_view(), name="get-attachment"),
     path("", include(router.urls)),
 ]
