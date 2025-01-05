@@ -138,23 +138,35 @@ class ContactListView(APIView):
         results = (
             service.users()
             .messages()
-            .list(userId="me", maxResults=500, q="in:sent")
+            .list(userId="me", maxResults=500, q="in:sent", fields="messages(id)")
             .execute()
         )
 
         contact_freq = {}
         messages = results.get("messages", [])
 
-        for message in messages:
-            msg = (
-                service.users().messages().get(userId="me", id=message["id"]).execute()
-            )
-            headers = msg["payload"]["headers"]
-            to_header = next((h["value"] for h in headers if h["name"] == "to"), "")
-            # if to_header:
-            #     for contact in parse_recipients(to_header):
-            #         key = f"{contact['name']}|{contact['email']}"
-            #         contact_freq[key] = contact_freq.get(key, 0) + 1
+        batch_size = 50
+        for i in range(0, len(messages), batch_size):
+            batch = messages[i : i + batch_size]
+            batch_request = service.new_batch_http_request()
+
+            def callback(request_id, response, exception):
+                if exception is None:
+                    headers = response["payload"]["headers"]
+                    if headers:
+                        for recipient in parse_recipients(headers).to:
+                            key = f"{recipient.name}|{recipient.email}"
+                            contact_freq[key] = contact_freq.get(key, 0) + 1
+
+            for msg in batch:
+                batch_request.add(
+                    service.users()
+                    .messages()
+                    .get(userId="me", id=msg["id"], fields="payload/headers"),
+                    callback=callback,
+                )
+
+            batch_request.execute()
 
         contacts = [
             {
@@ -164,11 +176,7 @@ class ContactListView(APIView):
             }
             for k, v in contact_freq.items()
         ]
-
         contacts.sort(key=lambda x: x["frequency"], reverse=True)
-
-        print(contacts[:100])
-
         return Response(contacts[:100])
 
 
