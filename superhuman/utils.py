@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import re
+from datetime import datetime
 from email.utils import parsedate_to_datetime
 from typing import List
 
@@ -9,14 +10,15 @@ import aiohttp
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-from .types import Contact, Email, Recipients
+from .models import GmailToken
+from .types import Attachment, Contact, Email, Recipients
 
 
 def pretty_print_json(json_data):
     print(json.dumps(json_data, indent=4))
 
 
-def get_credentials(token):
+def get_credentials(token: GmailToken) -> Credentials:
     with open("client_secrets.json", "r") as f:
         client_config = json.load(f)
 
@@ -99,7 +101,7 @@ def parse_recipients(headers: List[dict]) -> Recipients:
     )
 
 
-def process_message(msg: dict, creds: Credentials) -> dict:
+def process_message(msg: dict, creds: Credentials) -> Email:
     headers = msg["payload"]["headers"]
     subject = next(
         (h["value"] for h in headers if h["name"] == "Subject"), "No Subject"
@@ -109,7 +111,7 @@ def process_message(msg: dict, creds: Credentials) -> dict:
     parsed_date = parsedate_to_datetime(date)
 
     body = ""
-    attachments = []
+    attachments: List[Attachment] = []
     inline_images = {}
 
     def process_part(part):
@@ -149,14 +151,17 @@ def process_message(msg: dict, creds: Credentials) -> dict:
                 }
 
         if "attachment" in content_disposition and not content_id:
-            if "body" in part and "attachmentId" in part["body"]:
+            if (
+                "body" in part
+                and "attachmentId" in part["body"]
+                and "data" in part["body"]
+            ):
                 attachments.append(
-                    {
-                        "id": part["body"]["attachmentId"],
-                        "filename": part.get("filename", ""),
-                        "mimeType": mime_type,
-                        "size": part["body"].get("size", 0),
-                    }
+                    Attachment(
+                        filename=part.get("filename", ""),
+                        mime_type=mime_type,
+                        data=part["body"]["data"],
+                    )
                 )
         elif mime_type == "text/html" and "body" in part and "data" in part["body"]:
             body = base64.urlsafe_b64decode(part["body"]["data"]).decode()
@@ -187,37 +192,74 @@ def process_message(msg: dict, creds: Credentials) -> dict:
 
     recipients = parse_recipients(headers)
 
-    return {
-        "id": msg["id"],
-        "thread_id": msg["threadId"],
-        "subject": subject,
-        "sender": {"name": sender.name, "email": sender.email, "is_me": sender.is_me},
-        "to": {
-            "to": [
-                {"name": c.name, "email": c.email, "is_me": c.is_me}
-                for c in recipients.to
-            ],
-            "cc": [
-                {"name": c.name, "email": c.email, "is_me": c.is_me}
-                for c in recipients.cc
-            ],
-            "bcc": [
-                {"name": c.name, "email": c.email, "is_me": c.is_me}
-                for c in recipients.bcc
-            ],
-        },
-        "date": parsed_date.isoformat(),
-        "timestamp": parsed_date.timestamp(),
-        "snippet": msg.get("snippet", ""),
-        "read": "UNREAD" not in msg["labelIds"],
-        "body": body,
-        "attachments": attachments,
-    }
+    return Email(
+        id=msg["id"],
+        thread_id=msg["threadId"],
+        subject=subject,
+        sender=sender,
+        to=Recipients(
+            to=recipients.to,
+            cc=recipients.cc,
+            bcc=recipients.bcc,
+        ),
+        date=parsed_date.isoformat(),
+        timestamp=parsed_date.timestamp(),
+        snippet=msg.get("snippet", ""),
+        read=msg["labelIds"] == ["UNREAD"],
+        body=body,
+        attachments=attachments,
+    )
+
+
+def process_message_draft(msg: dict, creds: Credentials) -> Email:
+    headers = msg["payload"]["headers"]
+    subject = next(
+        (h["value"] for h in headers if h["name"] == "Subject"), "No Subject"
+    )
+    from_header = next((h["value"] for h in headers if h["name"] == "From"), "Unknown")
+    date = next((h["value"] for h in headers if h["name"] == "Date"), "")
+    parsed_date = parsedate_to_datetime(date) if date else datetime.now()
+
+    body = ""
+    attachments: List[Attachment] = []
+
+    def process_part(part):
+        nonlocal body
+        if part.get("mimeType") == "text/plain":
+            if "data" in part.get("body", {}):
+                body = base64.urlsafe_b64decode(part["body"]["data"]).decode()
+        elif "parts" in part:
+            for subpart in part["parts"]:
+                process_part(subpart)
+
+    if "payload" in msg:
+        if msg["payload"].get("body", {}).get("data"):
+            body = base64.urlsafe_b64decode(msg["payload"]["body"]["data"]).decode()
+        else:
+            process_part(msg["payload"])
+
+    sender = parse_contact(from_header)
+    sender.is_me = True
+    recipients = parse_recipients(headers)
+
+    return Email(
+        id=msg["id"],
+        thread_id=msg["threadId"],
+        subject=subject,
+        sender=sender,
+        to=Recipients(to=recipients.to, cc=recipients.cc, bcc=recipients.bcc),
+        date=parsed_date.isoformat(),
+        timestamp=parsed_date.timestamp(),
+        snippet=msg.get("snippet", ""),
+        read=True,
+        body=body,
+        attachments=attachments,
+    )
 
 
 async def process_messages_async(
     messages: List[dict], creds: Credentials
-) -> List[dict]:
+) -> List[Email]:
     async def process_single_message(msg):
         return await asyncio.to_thread(process_message, msg, creds)
 

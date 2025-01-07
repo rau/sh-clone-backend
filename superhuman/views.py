@@ -16,11 +16,12 @@ from rest_framework.viewsets import ReadOnlyModelViewSet
 
 from .models import GmailToken
 from .serializers import GmailTokenSerializer
-from .types import Email, Folder
+from .types import Draft, Email, Folder, Thread
 from .utils import (
     get_credentials,
     parse_recipients,
     process_message,
+    process_message_draft,
     process_messages_async,
 )
 
@@ -227,7 +228,7 @@ class SearchEmailView(APIView):
                 .execute()
             )
 
-            emails.append(process_message(msg, creds))
+            emails.append(process_message(msg=msg, creds=creds))
 
         return Response(emails)
 
@@ -335,15 +336,15 @@ class FolderListView(APIView):
                     service.users().labels().get(userId="me", id=label["id"]).execute()
                 )
                 folders.append(
-                    {
-                        "id": label_info["id"],
-                        "name": label_info["name"],
-                        "type": label_info["type"],
-                        "message_count": label_info.get("messagesTotal", 0),
-                    }
+                    Folder(
+                        id=label_info["id"],
+                        name=label_info["name"],
+                        type=label_info["type"],
+                        message_count=label_info.get("messagesTotal", 0),
+                    )
                 )
 
-            return Response(folders)
+            return Response([f.to_dict() for f in folders])
         except Exception as e:
             return Response({"error": str(e)}, status=400)
 
@@ -378,50 +379,45 @@ class FolderEmailsView(APIView):
             creds = get_credentials(token)
             service = build("gmail", "v1", credentials=creds)
 
-            try:
-                threads = await asyncio.to_thread(
+            # try:
+            threads = await asyncio.to_thread(
+                lambda: service.users()
+                .threads()
+                .list(userId="me", maxResults=20, labelIds=[label_id])
+                .execute()
+            )
+
+            thread_list: List[Thread] = []
+            for thread in threads.get("threads", []):
+                thread_data = await asyncio.to_thread(
                     lambda: service.users()
                     .threads()
-                    .list(userId="me", maxResults=20, labelIds=[label_id])
+                    .get(userId="me", id=thread["id"], format="full")
                     .execute()
                 )
 
-                thread_list = []
-                for thread in threads.get("threads", []):
-                    thread_data = await asyncio.to_thread(
-                        lambda: service.users()
-                        .threads()
-                        .get(userId="me", id=thread["id"], format="full")
-                        .execute()
-                    )
+                messages = await process_messages_async(thread_data["messages"], creds)
+                messages.sort(key=lambda x: x.timestamp)
 
-                    messages = await process_messages_async(
-                        thread_data["messages"], creds
-                    )
-                    messages.sort(key=lambda x: x["timestamp"])
-
-                    if messages:
-                        thread_list.append(
-                            {
-                                "id": thread["id"],
-                                "messages": messages,
-                                "subject": messages[0]["subject"],
-                                "snippet": messages[-1]["snippet"],
-                                "last_message_timestamp": messages[-1]["timestamp"],
-                                "starred": "STARRED"
-                                in thread_data["messages"][-1]["labelIds"],
-                            }
+                if messages:
+                    thread_list.append(
+                        Thread(
+                            id=thread["id"],
+                            messages=messages,
+                            subject=messages[0].subject,
+                            snippet=messages[-1].snippet,
+                            last_message_timestamp=messages[-1].timestamp,
+                            starred=False,
+                            is_draft=False,
                         )
+                    )
 
-                thread_list.sort(
-                    key=lambda x: x["last_message_timestamp"], reverse=True
-                )
-                print("threaad_list len", len(thread_list))
-                return Response(thread_list)
+            thread_list.sort(key=lambda x: x.last_message_timestamp, reverse=True)
+            return Response([t.to_dict() for t in thread_list])
 
-            except Exception as e:
-                print(e)
-                return Response({"error": str(e)}, status=400)
+            # except Exception as e:
+            #     print(e)
+            #     return Response({"error": str(e)}, status=400)
 
         return asyncio.run(fetch_folder_emails())
 
@@ -704,5 +700,147 @@ class GetAttachmentView(APIView):
             data = attachment["data"]
             return Response({"data": data})
         except Exception as e:
+            print(e)
+            return Response({"error": str(e)}, status=400)
+
+
+class CreateDraftView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        token = GmailToken.objects.get(id=request.headers.get("X-Account-ID"))
+        if not token:
+            return Response({"error": "No token found"}, status=404)
+
+        creds = get_credentials(token)
+        service = build("gmail", "v1", credentials=creds)
+
+        message = MIMEMultipart()
+        if request.data.get("to"):
+            message["To"] = ",".join(request.data["to"])
+        if request.data.get("subject"):
+            message["Subject"] = request.data["subject"]
+        if request.data.get("cc"):
+            message["Cc"] = ",".join(request.data["cc"])
+        if request.data.get("bcc"):
+            message["Bcc"] = ",".join(request.data["bcc"])
+        if request.data.get("reply_to_email"):
+            message["inReplyTo"] = request.data["reply_to_email"]
+
+        if request.data.get("body"):
+            message.attach(MIMEText(request.data["body"]))
+
+        print(message)
+
+        if request.data.get("attachments"):
+            for attachment in request.data["attachments"]:
+                part = MIMEApplication(
+                    attachment["content"], _subtype=attachment["type"]
+                )
+                part.add_header(
+                    "Content-Disposition", "attachment", filename=attachment["name"]
+                )
+                message.attach(part)
+
+        raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+
+        try:
+            draft_id = request.data.get("draft_id")
+            if draft_id:
+                draft = (
+                    service.users()
+                    .drafts()
+                    .update(userId="me", id=draft_id, body={"message": {"raw": raw}})
+                    .execute()
+                )
+            else:
+                draft = (
+                    service.users()
+                    .drafts()
+                    .create(userId="me", body={"message": {"raw": raw}})
+                    .execute()
+                )
+
+            msg = (
+                service.users()
+                .messages()
+                .get(userId="me", id=draft["message"]["id"], format="full")
+                .execute()
+            )
+
+            return Response(process_message(msg, creds).to_dict())
+        except Exception as e:
+            return Response({"error": str(e)}, status=400)
+
+
+class DraftsView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request) -> Response:
+        token = GmailToken.objects.get(id=request.headers.get("X-Account-ID"))
+        if not token:
+            return Response({"error": "No token found"}, status=404)
+
+        creds = get_credentials(token)
+        service = build("gmail", "v1", credentials=creds)
+
+        try:
+            drafts = service.users().drafts().list(userId="me").execute()
+            draft_list: List[Thread] = []
+
+            for draft in drafts.get("drafts", []):
+                msg = (
+                    service.users()
+                    .messages()
+                    .get(userId="me", id=draft["message"]["id"], format="full")
+                    .execute()
+                )
+
+                messages = [process_message_draft(msg=msg, creds=creds)]
+                print(messages)
+                draft_list.append(
+                    Thread(
+                        id=draft["id"],
+                        messages=messages,
+                        subject=messages[0].subject,
+                        snippet=messages[0].snippet,
+                        last_message_timestamp=messages[0].timestamp,
+                        starred=False,
+                        is_draft=True,
+                    )
+                )
+
+            return Response([t.to_dict() for t in draft_list])
+        except Exception as e:
+            import traceback
+
+            print(
+                f"Error fetching drafts: {str(e)}\nType: {type(e)}\nTraceback:\n{''.join(traceback.format_tb(e.__traceback__))}"
+            )
+            return Response({"error": str(e)}, status=400)
+
+
+class DiscardDraftView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        token = GmailToken.objects.get(id=request.headers.get("X-Account-ID"))
+        if not token:
+            return Response({"error": "No token found"}, status=404)
+
+        draft_ids = request.data.get("draft_ids", [])
+        if not draft_ids:
+            return Response({"error": "No draft_ids provided"}, status=400)
+
+        creds = get_credentials(token)
+        service = build("gmail", "v1", credentials=creds)
+
+        try:
+            for draft_id in draft_ids:
+                service.users().drafts().delete(userId="me", id=draft_id).execute()
+
+            return Response({"status": "success"})
+        except Exception as e:
+            print(e)
             print(e)
             return Response({"error": str(e)}, status=400)

@@ -26,4 +26,7 @@ urlpatterns = [
     ),
     path("attachment/", views.GetAttachmentView.as_view(), name="get-attachment"),
     path("", include(router.urls)),
+    path("drafts/", views.CreateDraftView.as_view(), name="create-draft"),
+    path("drafts/list/", views.DraftsView.as_view(), name="drafts-list"),
+    path("drafts/discard/", views.DiscardDraftView.as_view(), name="discard-drafts"),
 ]
