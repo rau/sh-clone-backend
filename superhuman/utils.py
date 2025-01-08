@@ -205,7 +205,7 @@ def process_message(msg: dict, creds: Credentials) -> Email:
         date=parsed_date.isoformat(),
         timestamp=parsed_date.timestamp(),
         snippet=msg.get("snippet", ""),
-        read=msg["labelIds"] == ["UNREAD"],
+        read="UNREAD" not in msg["labelIds"],
         body=body,
         attachments=attachments,
     )
