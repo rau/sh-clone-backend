@@ -722,9 +722,17 @@ class CreateDraftView(APIView):
         if request.data.get("subject"):
             message["Subject"] = request.data["subject"]
         if request.data.get("cc"):
-            message["Cc"] = ",".join(request.data["cc"])
+            cc_addresses = [
+                f"{contact['name']} <{contact['email']}>"
+                for contact in request.data["cc"]
+            ]
+            message["Cc"] = ", ".join(cc_addresses)
         if request.data.get("bcc"):
-            message["Bcc"] = ",".join(request.data["bcc"])
+            bcc_addresses = [
+                f"{contact['name']} <{contact['email']}>"
+                for contact in request.data["bcc"]
+            ]
+            message["Bcc"] = ", ".join(bcc_addresses)
         if request.data.get("reply_to_email"):
             message["inReplyTo"] = request.data["reply_to_email"]
 
