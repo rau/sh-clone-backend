@@ -42,8 +42,6 @@ class SendEmailView(APIView):
         message["to"] = ",".join(request.data["to"])
         message["subject"] = request.data["subject"]
 
-        print(request.data)
-
         if request.data.get("cc"):
             message["cc"] = ",".join(request.data["cc"])
         if request.data.get("bcc"):
@@ -51,7 +49,6 @@ class SendEmailView(APIView):
         if request.data.get("reply_to_email"):
             message["inReplyTo"] = request.data["reply_to_email"]
 
-        print(message)
         message.attach(MIMEText(request.data["body"]))
 
         if request.data.get("attachments"):
@@ -717,7 +714,11 @@ class CreateDraftView(APIView):
 
         message = MIMEMultipart()
         if request.data.get("to"):
-            message["To"] = ",".join(request.data["to"])
+            to_addresses = [
+                f"{contact['name']} <{contact['email']}>"
+                for contact in request.data["to"]
+            ]
+            message["To"] = ", ".join(to_addresses)
         if request.data.get("subject"):
             message["Subject"] = request.data["subject"]
         if request.data.get("cc"):
@@ -729,8 +730,6 @@ class CreateDraftView(APIView):
 
         if request.data.get("body"):
             message.attach(MIMEText(request.data["body"]))
-
-        print(message)
 
         if request.data.get("attachments"):
             for attachment in request.data["attachments"]:
