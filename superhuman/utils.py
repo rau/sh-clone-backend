@@ -46,7 +46,7 @@ async def fetch_attachment(session, service, msg_id, attachment_id):
         )
         return attachment["data"]
     except Exception as e:
-        print(f"Failed to fetch attachment {attachment_id}: {e}")
+        # print(f"Failed to fetch attachment {attachment_id}: {e}")
         return None
 
 
@@ -151,16 +151,12 @@ def process_message(msg: dict, creds: Credentials) -> Email:
                 }
 
         if "attachment" in content_disposition and not content_id:
-            if (
-                "body" in part
-                and "attachmentId" in part["body"]
-                and "data" in part["body"]
-            ):
+            if "body" in part and "attachmentId" in part["body"]:
                 attachments.append(
                     Attachment(
                         filename=part.get("filename", ""),
                         mime_type=mime_type,
-                        data=part["body"]["data"],
+                        data="",
                     )
                 )
         elif mime_type == "text/html" and "body" in part and "data" in part["body"]:
@@ -222,22 +218,78 @@ def process_message_draft(msg: dict, creds: Credentials) -> Email:
 
     body = ""
     attachments: List[Attachment] = []
+    inline_images = {}
 
     def process_part(part):
         nonlocal body
-        if part.get("mimeType") == "text/plain":
-            if "data" in part.get("body", {}):
-                body = base64.urlsafe_b64decode(part["body"]["data"]).decode()
-        elif "parts" in part:
+
+        if "parts" in part:
             for subpart in part["parts"]:
                 process_part(subpart)
+            return
+
+        mime_type = part.get("mimeType", "")
+        headers = part.get("headers", [])
+
+        content_id = next(
+            (
+                h["value"].strip("<>")
+                for h in headers
+                if h["name"].lower() == "content-id"
+            ),
+            None,
+        )
+        content_disposition = next(
+            (h["value"] for h in headers if h["name"].lower() == "content-disposition"),
+            "",
+        )
+
+        if content_id:
+            if "body" in part and "data" in part["body"]:
+                inline_images[content_id] = {
+                    "data": part["body"]["data"],
+                    "mimeType": mime_type,
+                }
+            elif "body" in part and "attachmentId" in part["body"]:
+                inline_images[content_id] = {
+                    "attachmentId": part["body"]["attachmentId"],
+                    "mimeType": mime_type,
+                }
+
+        if "attachment" in content_disposition and not content_id:
+            if "body" in part and "attachmentId" in part["body"]:
+                attachments.append(
+                    Attachment(
+                        filename=part.get("filename", ""),
+                        mime_type=mime_type,
+                        data="",
+                    )
+                )
+        elif mime_type == "text/html" and "body" in part and "data" in part["body"]:
+            body = base64.urlsafe_b64decode(part["body"]["data"]).decode()
 
     if "payload" in msg:
-        if msg["payload"].get("body", {}).get("data"):
-            body = base64.urlsafe_b64decode(msg["payload"]["body"]["data"]).decode()
-        else:
-            process_part(msg["payload"])
+        process_part(msg["payload"])
 
+    if body and inline_images:
+        service = build("gmail", "v1", credentials=creds)
+        attachment_data = asyncio.run(
+            fetch_all_attachments(service, msg["id"], inline_images)
+        )
+        inline_images.update(attachment_data)
+
+        for cid, img in inline_images.items():
+            if "data" in img:
+                new_src = f'src="data:{img["mimeType"]};base64,{img["data"]}"'
+                old_srcs = [
+                    f'src="cid:{cid}"',
+                    f'src="cid:{cid}@"',
+                    f'src="cid:{cid}@[^"]*"',
+                ]
+                for old_src in old_srcs:
+                    body = re.sub(old_src, new_src, body, flags=re.IGNORECASE)
+
+    print
     sender = parse_contact(from_header)
     sender.is_me = True
     recipients = parse_recipients(headers)

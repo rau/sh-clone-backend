@@ -1,6 +1,9 @@
 import asyncio
 import base64
+import mimetypes
+from email import encoders
 from email.mime.application import MIMEApplication
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import List
@@ -52,6 +55,7 @@ class SendEmailView(APIView):
         message.attach(MIMEText(request.data["body"]))
 
         if request.data.get("attachments"):
+            print(request.data.get("attachments"))
             for attachment in request.data["attachments"]:
                 part = MIMEApplication(
                     attachment["content"], _subtype=attachment["type"]
@@ -72,7 +76,6 @@ class SendEmailView(APIView):
             )
             return Response({"message_id": sent_message["id"]})
         except Exception as e:
-            print(e)
             return Response({"error": str(e)}, status=400)
 
 
@@ -276,7 +279,6 @@ class MarkDoneView(APIView):
                 ).execute()
             return Response({"status": "success"})
         except Exception as e:
-            print(e)
             return Response({"error": str(e)}, status=400)
 
 
@@ -309,7 +311,6 @@ class MarkReadView(APIView):
                 ).execute()
             return Response({"status": "success"})
         except Exception as e:
-            print(e)
             return Response({"error": str(e)}, status=400)
 
 
@@ -413,7 +414,7 @@ class FolderEmailsView(APIView):
             return Response([t.to_dict() for t in thread_list])
 
             # except Exception as e:
-            #     print(e)
+            #
             #     return Response({"error": str(e)}, status=400)
 
         return asyncio.run(fetch_folder_emails())
@@ -461,7 +462,6 @@ class CreateFolderView(APIView):
             )
 
         except Exception as e:
-            print(e)
             return Response({"error": str(e)}, status=400)
 
 
@@ -490,7 +490,7 @@ class AccountsView(APIView):
                     }
                 )
             except Exception as e:
-                print(e)
+
                 continue
 
         return Response(accounts)
@@ -530,7 +530,6 @@ class MarkUndoneView(APIView):
                 return Response({"status": "success"})
             return Response({"error": "Done label not found"}, status=400)
         except Exception as e:
-            print(e)
             return Response({"error": str(e)}, status=400)
 
 
@@ -563,7 +562,6 @@ class StarEmailView(APIView):
                 ).execute()
             return Response({"status": "success"})
         except Exception as e:
-            print(e)
             return Response({"error": str(e)}, status=400)
 
 
@@ -596,7 +594,6 @@ class TrashEmailView(APIView):
                 ).execute()
             return Response({"status": "success"})
         except Exception as e:
-            print(e)
             return Response({"error": str(e)}, status=400)
 
 
@@ -629,7 +626,6 @@ class SpamEmailView(APIView):
                 ).execute()
             return Response({"status": "success"})
         except Exception as e:
-            print(e)
             return Response({"error": str(e)}, status=400)
 
 
@@ -663,7 +659,6 @@ class ModifyThreadLabelsView(APIView):
                 ).execute()
             return Response({"status": "success"})
         except Exception as e:
-            print(e)
             return Response({"error": str(e)}, status=400)
 
 
@@ -697,7 +692,6 @@ class GetAttachmentView(APIView):
             data = attachment["data"]
             return Response({"data": data})
         except Exception as e:
-            print(e)
             return Response({"error": str(e)}, status=400)
 
 
@@ -740,10 +734,19 @@ class CreateDraftView(APIView):
             message.attach(MIMEText(request.data["body"]))
 
         if request.data.get("attachments"):
+            print(request.data.get("attachments"))
             for attachment in request.data["attachments"]:
-                part = MIMEApplication(
-                    attachment["content"], _subtype=attachment["type"]
+                file_content = base64.b64decode(attachment["content"])
+                mime_type = mimetypes.guess_type(attachment["name"])[0]
+                maintype, subtype = (
+                    mime_type.split("/", 1)
+                    if mime_type
+                    else ("application", "octet-stream")
                 )
+
+                part = MIMEBase(maintype, subtype)
+                part.set_payload(file_content)
+                encoders.encode_base64(part)
                 part.add_header(
                     "Content-Disposition", "attachment", filename=attachment["name"]
                 )
@@ -804,7 +807,7 @@ class DraftsView(APIView):
                 )
 
                 messages = [process_message_draft(msg=msg, creds=creds)]
-                print(messages)
+                # print(messages)
                 draft_list.append(
                     Thread(
                         id=draft["id"],
@@ -848,6 +851,4 @@ class DiscardDraftView(APIView):
 
             return Response({"status": "success"})
         except Exception as e:
-            print(e)
-            print(e)
             return Response({"error": str(e)}, status=400)
