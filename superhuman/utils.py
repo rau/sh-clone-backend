@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import re
+import traceback
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from typing import List
@@ -103,9 +104,7 @@ def parse_recipients(headers: List[dict]) -> Recipients:
 
 def process_message(msg: dict, creds: Credentials) -> Email:
     headers = msg["payload"]["headers"]
-    subject = next(
-        (h["value"] for h in headers if h["name"] == "Subject"), "No Subject"
-    )
+    subject = next((h["value"] for h in headers if h["name"] == "Subject"), "")
     from_header = next((h["value"] for h in headers if h["name"] == "From"), "Unknown")
     date = next((h["value"] for h in headers if h["name"] == "Date"), "")
     parsed_date = parsedate_to_datetime(date)
@@ -209,9 +208,7 @@ def process_message(msg: dict, creds: Credentials) -> Email:
 
 def process_message_draft(msg: dict, creds: Credentials) -> Email:
     headers = msg["payload"]["headers"]
-    subject = next(
-        (h["value"] for h in headers if h["name"] == "Subject"), "No Subject"
-    )
+    subject = next((h["value"] for h in headers if h["name"] == "Subject"), "-")
     from_header = next((h["value"] for h in headers if h["name"] == "From"), "Unknown")
     date = next((h["value"] for h in headers if h["name"] == "Date"), "")
     parsed_date = parsedate_to_datetime(date) if date else datetime.now()
@@ -317,3 +314,9 @@ async def process_messages_async(
 
     tasks = [process_single_message(msg) for msg in messages]
     return await asyncio.gather(*tasks)
+
+
+def print_detailed_error(e):
+    print(f"Error: {e}")
+    print(f"Error type: {type(e)}")
+    print(f"Error traceback: {traceback.format_exc()}")

@@ -23,6 +23,8 @@ from .types import Draft, Email, Folder, Thread
 from .utils import (
     get_credentials,
     parse_recipients,
+    pretty_print_json,
+    print_detailed_error,
     process_message,
     process_message_draft,
     process_messages_async,
@@ -68,6 +70,7 @@ class SendEmailView(APIView):
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
 
         try:
+            return Response({"raw": raw})
             sent_message = (
                 service.users()
                 .messages()
@@ -699,6 +702,7 @@ class CreateDraftView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
+        pretty_print_json(request.data)
         token = GmailToken.objects.get(id=request.headers.get("X-Account-ID"))
         if not token:
             return Response({"error": "No token found"}, status=404)
@@ -780,6 +784,7 @@ class CreateDraftView(APIView):
 
             return Response(process_message(msg, creds).to_dict())
         except Exception as e:
+            print_detailed_error(e)
             return Response({"error": str(e)}, status=400)
 
 
