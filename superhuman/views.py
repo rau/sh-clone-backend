@@ -109,7 +109,7 @@ class GmailAuthView(APIView):
             GmailToken.objects.create(
                 token=credentials.token, refresh_token=credentials.refresh_token
             )
-            return redirect("http://localhost:1212/success")
+            return redirect("http://localhost:3000")
 
         auth_url = flow.authorization_url(
             access_type="offline", prompt="consent", include_granted_scopes="true"
@@ -735,7 +735,7 @@ class CreateDraftView(APIView):
             message["inReplyTo"] = request.data["reply_to_email"]
 
         if request.data.get("body"):
-            message.attach(MIMEText(request.data["body"]))
+            message.attach(MIMEText(request.data["body"], "html"))
 
         if request.data.get("attachments"):
             print(request.data.get("attachments"))

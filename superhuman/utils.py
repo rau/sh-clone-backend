@@ -208,7 +208,7 @@ def process_message(msg: dict, creds: Credentials) -> Email:
 
 def process_message_draft(msg: dict, creds: Credentials) -> Email:
     headers = msg["payload"]["headers"]
-    subject = next((h["value"] for h in headers if h["name"] == "Subject"), "-")
+    subject = next((h["value"] for h in headers if h["name"] == "Subject"), "")
     from_header = next((h["value"] for h in headers if h["name"] == "From"), "Unknown")
     date = next((h["value"] for h in headers if h["name"] == "Date"), "")
     parsed_date = parsedate_to_datetime(date) if date else datetime.now()
@@ -266,6 +266,7 @@ def process_message_draft(msg: dict, creds: Credentials) -> Email:
             body = base64.urlsafe_b64decode(part["body"]["data"]).decode()
 
     if "payload" in msg:
+        pretty_print_json(msg["payload"])
         process_part(msg["payload"])
 
     if body and inline_images:
@@ -286,7 +287,6 @@ def process_message_draft(msg: dict, creds: Credentials) -> Email:
                 for old_src in old_srcs:
                     body = re.sub(old_src, new_src, body, flags=re.IGNORECASE)
 
-    print
     sender = parse_contact(from_header)
     sender.is_me = True
     recipients = parse_recipients(headers)
